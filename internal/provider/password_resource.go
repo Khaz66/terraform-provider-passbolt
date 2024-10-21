@@ -31,9 +31,9 @@ type passwordModel struct {
 	Name         types.String `tfsdk:"name"`
 	Username     types.String `tfsdk:"username"`
 	Uri          types.String `tfsdk:"uri"`
-	ShareGroup   types.String `tfsdk:"share_group"`
-	FolderParent types.String `tfsdk:"folder_parent"`
+	FolderParentId types.String `tfsdk:"folder_parent_id"`
 	Password     types.String `tfsdk:"password"`
+	Description     types.String `tfsdk:"description"`
 }
 
 // Configure adds the provider configured client to the resource.
@@ -75,17 +75,17 @@ func (r *passwordResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Required: true,
 			},
 			"uri": schema.StringAttribute{
-				Required: true,
-			},
-			"share_group": schema.StringAttribute{
 				Optional: true,
 			},
-			"folder_parent": schema.StringAttribute{
+			"folder_parent_id": schema.StringAttribute{
 				Optional: true,
 			},
 			"password": schema.StringAttribute{
 				Required:  true,
 				Sensitive: true,
+			},
+			"description": schema.StringAttribute{
+				Optional: true,
 			},
 		},
 	}
@@ -119,18 +119,18 @@ func (r *passwordResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	var folderId string
-	if !plan.FolderParent.IsUnknown() && !plan.FolderParent.IsNull() {
+	if !plan.FolderParentId.IsUnknown() && !plan.FolderParentId.IsNull() {
 		for _, folder := range folders {
-			if folder.Name == plan.FolderParent.ValueString() {
+			if folder.ID == plan.FolderParentId.ValueString() {
 				folderId = folder.ID
 			}
 		}
 	}
 
-	resourceId, err := helper.CreateResource(ctx, r.client.Client, folderId, plan.Name.ValueString(), plan.Username.ValueString(), plan.Uri.ValueString(), plan.Password.ValueString(), "")
-
+	resourceId, err := helper.CreateResource(ctx, r.client.Client, folderId, plan.Name.ValueString(), plan.Username.ValueString(), plan.Uri.ValueString(), plan.Password.ValueString(), plan.Description.ValueString())
+/*
 	var groupId string
-	if !plan.ShareGroup.IsUnknown() && !plan.FolderParent.IsNull() {
+	if !plan.ShareGroup.IsUnknown() && !plan.FolderParentId.IsNull() {
 		groups, _ := r.client.Client.GetGroups(ctx, nil)
 
 		for _, group := range groups {
@@ -155,7 +155,7 @@ func (r *passwordResource) Create(ctx context.Context, req resource.CreateReques
 			}
 		}
 	}
-
+*/
 	plan.ID = types.StringValue(resourceId)
 
 	// Set state to fully populated data
@@ -167,11 +167,92 @@ func (r *passwordResource) Create(ctx context.Context, req resource.CreateReques
 }
 
 // Read refreshes the Terraform state with the latest data.
-func (r *passwordResource) Read(_ context.Context, _ resource.ReadRequest, _ *resource.ReadResponse) {
+func (r *passwordResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var plan passwordModel
+	diags := req.State.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	folderParentID, name, username, uri, password, description , err  := helper.GetResource(ctx, r.client.Client, plan.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Read password ", "",
+		)
+		return
+	}
+
+	passwordState := passwordModel{
+		ID:             plan.ID,
+		Name:           types.StringValue(name),
+		Username: 		types.StringValue(username),
+		FolderParentId: types.StringValue(folderParentID),
+		Uri:          types.StringValue(uri),
+		Description:     types.StringValue(description),
+		Password:		types.StringValue(password),
+	}
+
+
+
+	// Set state
+	diag := resp.State.Set(ctx, passwordState)
+	resp.Diagnostics.Append(diag...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 }
 
 // Update updates the resource and sets the updated Terraform state on success.
-func (r *passwordResource) Update(_ context.Context, _ resource.UpdateRequest, _ *resource.UpdateResponse) {
+func (r *passwordResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan passwordModel
+	diags := req.Plan.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var state passwordModel
+	diags = req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	errUpd  := helper.UpdateResource(ctx, r.client.Client, state.ID.ValueString(), plan.Name.ValueString(), plan.Username.ValueString(), plan.Uri.ValueString(), plan.Password.ValueString(), plan.Description.ValueString())
+	if errUpd != nil {
+		resp.Diagnostics.AddError(
+			"Unable to update password ", "",
+		)
+		return
+	}
+
+	if state.FolderParentId != plan.FolderParentId {
+		errMove := helper.MoveResource(ctx, r.client.Client, state.ID.ValueString(),plan.FolderParentId.ValueString())
+		if errMove != nil {
+			resp.Diagnostics.AddError(
+				"Unable to move password ", "",
+			)
+			return
+		}
+	}
+
+	passwordState := passwordModel{
+		ID:             state.ID,
+		Name:           plan.Name,
+		Username: 		plan.Username,
+		FolderParentId: plan.FolderParentId,
+		Uri:          plan.Uri,
+		Description:     plan.Description,
+		Password:		plan.Password,
+	}
+
+	// Set state
+	diag := resp.State.Set(ctx, passwordState)
+	resp.Diagnostics.Append(diag...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	
 }
 
 // Delete deletes the resource and removes the Terraform state on success.

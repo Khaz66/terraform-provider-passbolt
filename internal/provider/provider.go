@@ -186,6 +186,8 @@ func (p *passboltProvider) Configure(ctx context.Context, req provider.Configure
 func (p *passboltProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewFoldersDataSource,
+		NewFolderDataSource,
+		NewPasswordDataSource,
 	}
 }
 
@@ -194,5 +196,7 @@ func (p *passboltProvider) Resources(_ context.Context) []func() resource.Resour
 	return []func() resource.Resource{
 		NewFolderResource,
 		NewPasswordResource,
+		NewShareResource,
+		NewShareFolder,
 	}
 }

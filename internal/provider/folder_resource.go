@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/passbolt/go-passbolt/api"
 	"terraform-provider-passbolt/tools"
@@ -31,8 +30,7 @@ type folderResource struct {
 type foldersModelCreate struct {
 	ID           types.String `tfsdk:"id"`
 	Name         types.String `tfsdk:"name"`
-	FolderParent types.String `tfsdk:"folder_parent"`
-	Personal     types.Bool   `tfsdk:"personal"`
+	FolderParentId types.String `tfsdk:"folder_parent_id"`
 }
 
 // Configure adds the provider configured client to the resource.
@@ -69,12 +67,7 @@ func (r *folderResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"name": schema.StringAttribute{
 				Required: true,
 			},
-			"personal": schema.BoolAttribute{
-				Computed: true,
-				Optional: true,
-				Default:  booldefault.StaticBool(false),
-			},
-			"folder_parent": schema.StringAttribute{
+			"folder_parent_id": schema.StringAttribute{
 				Optional: true,
 			},
 		},
@@ -91,6 +84,15 @@ func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
+	/*
+	parent, err := r.client.Client.GetFolder(r.client.Context, plan.FolderParentId.ValueString(),nil)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Read folder", "",
+		)
+		return
+	}
+
 	folders, err := r.client.Client.GetFolders(ctx, nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot get folders", "")
@@ -98,17 +100,17 @@ func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest,
 	}
 
 	var folderId string
-	if !plan.FolderParent.IsUnknown() && !plan.FolderParent.IsNull() {
+	if !plan.FolderParentId.IsUnknown() && !plan.FolderParentId.IsNull() {
 		for _, folder := range folders {
-			if folder.Name == plan.FolderParent.ValueString() {
+			if folder.ID == plan.FolderParentId.ValueString() {
 				folderId = folder.ID
 			}
 		}
 	}
-
+*/
 	// Generate API request body from plan
 	var folder = api.Folder{
-		FolderParentID: folderId,
+		FolderParentID: plan.FolderParentId.ValueString(),
 		Name:           plan.Name.ValueString(),
 	}
 
@@ -134,13 +136,110 @@ func (r *folderResource) Create(ctx context.Context, req resource.CreateRequest,
 }
 
 // Read refreshes the Terraform state with the latest data.
-func (r *folderResource) Read(_ context.Context, _ resource.ReadRequest, _ *resource.ReadResponse) {
+func (r *folderResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var plan foldersModelCreate
+	diags := req.State.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	folder, err := r.client.Client.GetFolder(r.client.Context, plan.ID.ValueString(),nil)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Read folder", "",
+		)
+		return
+	}
+
+	folderState := foldersModelCreate{
+		ID:             types.StringValue(folder.ID),
+		Name:           types.StringValue(folder.Name),
+		FolderParentId: types.StringValue(folder.FolderParentID),
+	}
+
+
+
+	// Set state
+	diag := resp.State.Set(ctx, folderState)
+	resp.Diagnostics.Append(diag...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 }
 
 // Update updates the resource and sets the updated Terraform state on success.
-func (r *folderResource) Update(_ context.Context, _ resource.UpdateRequest, _ *resource.UpdateResponse) {
+func (r *folderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan foldersModelCreate
+	diags := req.Plan.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var state foldersModelCreate
+	diags = req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if state.FolderParentId != plan.FolderParentId {
+		errMove := r.client.Client.MoveFolder(r.client.Context, state.ID.ValueString(), plan.FolderParentId.ValueString())
+		if errMove != nil {
+			resp.Diagnostics.AddError(
+				"Unable to move folder ", "",
+			)
+			return
+		}
+	}
+
+	// Generate API request body from plan
+	var folder = api.Folder{
+		FolderParentID: plan.FolderParentId.ValueString(),
+		Name:           plan.Name.ValueString(),
+	}
+
+	// Create new order
+	cFolder, errUpdate := r.client.Client.UpdateFolder(r.client.Context, state.ID.ValueString(), folder)
+	if errUpdate != nil {
+		resp.Diagnostics.AddError(
+			"Error updating folder",
+						"Could not update folder, unexpected error: "+errUpdate.Error(),
+		)
+		return
+	}
+
+	folderState := foldersModelCreate{
+		ID:             types.StringValue(cFolder.ID),
+		Name:           types.StringValue(cFolder.Name),
+		FolderParentId: types.StringValue(cFolder.FolderParentID),
+	}
+
+	// Map response body to schema and populate Computed attribute values
+	//plan.ID = types.StringValue(cFolder.ID)
+
+	// Set state to fully populated data
+	diags = resp.State.Set(ctx, folderState)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 }
 
 // Delete deletes the resource and removes the Terraform state on success.
-func (r *folderResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+func (r *folderResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state foldersModelCreate
+	diags := req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	err := r.client.Client.DeleteFolder(ctx, state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error deleting Folder",
+			"Could not delete Folder, unexpected error: "+err.Error(),
+		)
+		return
+}
 }
